@@ -1,5 +1,6 @@
 import express from 'express';
 import axios from 'axios';
+import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
 
@@ -19,6 +20,7 @@ console.log('[Prescription] RESEND_FROM_EMAIL:', RESEND_FROM_EMAIL);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+const localPrescriptions = new Map();
 
 // POST /api/prescription/generate
 router.post('/generate', async (req, res) => {
@@ -150,15 +152,15 @@ Do not include any explanation. Only return the JSON.`;
 
     if (insertErr) {
       console.error('[prescription/generate] Supabase insert error:', insertErr);
-      // The generated draft is still useful to the clinician. Let the UI show
-      // it and surface persistence as a warning instead of discarding it.
+      const localId = crypto.randomUUID();
+      localPrescriptions.set(localId, { status: 'draft' });
       return res.json({
-        prescription_id: null,
+        prescription_id: localId,
         consultation_id: consultationId,
         medications,
         additional_notes: additionalNotes,
         warnings,
-        persistence_warning: 'Draft generated but could not be saved yet.',
+        persistence_warning: 'Draft is being handled locally because the Supabase prescriptions table is unavailable.',
       });
     }
 
@@ -181,6 +183,11 @@ Do not include any explanation. Only return the JSON.`;
 router.post('/send-for-review', async (req, res) => {
   try {
     const { prescription_id, doctor_email, doctor_name, patient_name, medications, additional_notes, warnings } = req.body;
+    const reviewBaseUrl = (
+      process.env.APP_URL ||
+      process.env.VITE_APP_URL ||
+      `${req.protocol}://${req.get('host')}`
+    ).replace(/\/$/, '');
 
     console.log('[prescription/send-for-review] Received request');
     console.log('[prescription/send-for-review] prescription_id:', prescription_id);
@@ -189,6 +196,11 @@ router.post('/send-for-review', async (req, res) => {
 
     if (!doctor_email) {
       return res.status(400).json({ error: 'doctor_email is required' });
+    }
+    if (!prescription_id) {
+      return res.status(400).json({
+        error: 'This prescription was not saved. Generate it again before sending for review.',
+      });
     }
     if (!medications || !Array.isArray(medications)) {
       return res.status(400).json({ error: 'medications array is required' });
@@ -292,8 +304,8 @@ router.post('/send-for-review', async (req, res) => {
 
           <!-- Action buttons -->
           <div style="margin-top:32px;display:flex;gap:12px;">
-            <a href="#" style="display:inline-block;background:#0D9488;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:8px;">Approve</a>
-            <a href="#" style="display:inline-block;background:#ffffff;color:#475569;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:8px;border:1px solid #cbd5e1;">Request Changes</a>
+            <a href="${reviewBaseUrl}/api/prescription/review/${encodeURIComponent(prescription_id)}?decision=approved" style="display:inline-block;background:#0D9488;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:8px;">Approve</a>
+            <a href="${reviewBaseUrl}/api/prescription/review/${encodeURIComponent(prescription_id)}?decision=changes_requested" style="display:inline-block;background:#ffffff;color:#475569;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:8px;border:1px solid #cbd5e1;">Request Changes</a>
           </div>
 
           <!-- Footer -->
@@ -345,7 +357,11 @@ router.post('/send-for-review', async (req, res) => {
 
       if (updateErr) {
         console.error('[prescription/send-for-review] Supabase update error:', updateErr);
-        // Email was sent, so we still return success but log the error
+        const localPrescription = localPrescriptions.get(prescription_id);
+        if (localPrescription) {
+          localPrescription.status = 'pending_review';
+          localPrescription.sent_at = new Date().toISOString();
+        }
       } else {
         console.log('[prescription/send-for-review] Prescription status updated to pending_review');
       }
@@ -357,6 +373,55 @@ router.post('/send-for-review', async (req, res) => {
     return res.status(500).json({ error: 'Internal server error', detail: err.message });
   }
 });
+
+// GET /api/prescription/review/:prescriptionId?decision=approved|changes_requested
+// Email clients can follow these links without requiring a separate frontend login.
+router.get('/review/:prescriptionId', async (req, res) => {
+  const { prescriptionId } = req.params;
+  const { decision } = req.query;
+  const status = decision === 'approved' || decision === 'changes_requested' ? decision : null;
+
+  if (!status) {
+    return res.status(400).send(reviewResponseHtml('Invalid review action', 'The review action is not valid.'));
+  }
+
+  try {
+    const { error } = await supabase
+      .from('prescriptions')
+      .update({ status })
+      .eq('id', prescriptionId);
+
+    if (error) {
+      console.error('[prescription/review] Supabase update error:', error);
+      const localPrescription = localPrescriptions.get(prescriptionId);
+      if (!localPrescription) {
+        return res.status(502).send(reviewResponseHtml('Review failed', 'We could not update this prescription. Please try again.'));
+      }
+      localPrescription.status = status;
+      localPrescription.reviewed_at = new Date().toISOString();
+    }
+
+    const title = status === 'approved' ? 'Prescription approved' : 'Changes requested';
+    const message = status === 'approved'
+      ? 'The prescription is approved and ready for the care team to continue.'
+      : 'The care team has been notified that changes are needed.';
+    return res.send(reviewResponseHtml(title, message));
+  } catch (err) {
+    console.error('[prescription/review] Unexpected error:', err);
+    return res.status(500).send(reviewResponseHtml('Review failed', 'An unexpected error occurred. Please try again.'));
+  }
+});
+
+function reviewResponseHtml(title, message) {
+  return `<!doctype html>
+    <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
+    <body style="font-family:Arial,sans-serif;background:#f1f5f9;padding:48px 16px;color:#1e293b">
+      <main style="max-width:560px;margin:auto;background:#fff;border-radius:12px;padding:32px;text-align:center;border:1px solid #e2e8f0">
+        <h1 style="color:#0f766e">${escapeHtml(title)}</h1>
+        <p>${escapeHtml(message)}</p>
+      </main>
+    </body></html>`;
+}
 
 function escapeHtml(str) {
   if (!str) return '';

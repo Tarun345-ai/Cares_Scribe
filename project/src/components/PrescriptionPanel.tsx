@@ -89,6 +89,11 @@ export function PrescriptionPanel({ clinicalNote, transcription, patientId, cons
 
   const handleSendForReview = useCallback(async () => {
     if (!prescription || !doctorEmail.trim()) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(doctorEmail.trim())) {
+      setError('Enter a valid doctor email address.');
+      setStatus('error');
+      return;
+    }
     setStatus('sending');
     setError(null);
 
@@ -359,7 +364,7 @@ export function PrescriptionPanel({ clinicalNote, transcription, patientId, cons
             <div className="flex items-center gap-3">
               <button
                 onClick={handleSendForReview}
-                disabled={status === 'sending' || !doctorEmail.trim()}
+                disabled={status === 'sending' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(doctorEmail.trim())}
                 className="flex items-center gap-2 rounded-xl bg-teal-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-teal-600/20 transition-all hover:bg-teal-700 hover:shadow-xl hover:shadow-teal-600/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {status === 'sending' ? (

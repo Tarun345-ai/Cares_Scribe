@@ -23,7 +23,7 @@ export default function VoiceConsultationPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
   const [patientName, setPatientName] = useState('');
-  const [patientEmail, setPatientEmail] = useState('patient@example.com');
+  const [patientEmail, setPatientEmail] = useState('');
   const [consultationId, setConsultationId] = useState<string | undefined>(undefined);
   const [consentOpen, setConsentOpen] = useState(false);
   const [patientConsentStorage, setPatientConsentStorage] = useState<boolean | null>(null);
@@ -129,7 +129,7 @@ export default function VoiceConsultationPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          patient_email: patientEmail.trim() || 'patient@example.com',
+          patient_email: patientEmail.trim(),
           patient_name: patientName.trim() || 'Patient',
           transcription: result.transcription,
           clinical_note: result.clinical_note,
@@ -157,7 +157,7 @@ export default function VoiceConsultationPage() {
     setResult(null);
     setEmailSent(false);
     setPatientName('');
-    setPatientEmail('patient@example.com');
+    setPatientEmail('');
     setConsultationId(undefined);
     setPatientConsentStorage(null);
     setAbhaRecords([]);

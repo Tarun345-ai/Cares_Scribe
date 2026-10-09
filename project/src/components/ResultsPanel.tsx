@@ -195,13 +195,13 @@ export function ResultsPanel({
           <div className="flex items-center gap-2 rounded-xl bg-accent-50 border border-accent-200 px-4 py-3">
             <CheckCircle2 className="h-5 w-5 text-accent-600" />
             <span className="text-sm font-medium text-accent-700">
-              Patient summary & prescription sent via email successfully!
+              Patient summary sent via email successfully!
             </span>
           </div>
         ) : (
           <button
             onClick={onSendEmail}
-            disabled={isSaving}
+            disabled={isSaving || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(patientEmail.trim())}
             className="flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-primary-600/20 transition-all hover:bg-primary-700 hover:shadow-xl hover:shadow-primary-600/30 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? (
